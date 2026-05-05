@@ -2096,7 +2096,7 @@ NGINX_HTTPS_BLOCK = """\
     add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
 """
 
-SYSTEMD_SERVICE = """\
+SYSTEMD_SERVICE_CONTENT = """\
 [Unit]
 Description=ShopKit Watchdog
 After=network.target
@@ -2111,7 +2111,7 @@ StandardError=append:/var/log/shopkit/watchdog.log
 WantedBy=multi-user.target
 """
 
-SYSTEMD_TIMER = """\
+SYSTEMD_TIMER_CONTENT = """\
 [Unit]
 Description=ShopKit Watchdog Timer
 
@@ -2185,7 +2185,8 @@ def setup_logging(verbose: bool = False) -> None:
 def run_cmd(args: list[str], *, check: bool = True, input: str | None = None,
             capture: bool = False) -> subprocess.CompletedProcess:
     """Run a shell command, logging it first."""
-    logger.debug("run: %s", " ".join(str(a) for a in args))
+    _safe = [("***" if str(a).startswith("-p") and len(str(a)) > 2 else str(a)) for a in args]
+    logger.debug("run: %s", " ".join(_safe))
     return subprocess.run(
         args,
         check=check,
@@ -2367,15 +2368,17 @@ def download_bootstrap() -> None:
 
 def create_admin_user(email: str, password: str, name: str,
                       db_name: str, db_user: str, db_pass: str) -> None:
-    """Create admin user via PHP CLI."""
+    """Create admin user via PHP CLI (password passed via stdin, never on command line)."""
     logger.info("Creating admin user...")
+    # Pass password via stdin to avoid it appearing in process list or logs
     result = run_cmd(
-        ["php", "-r", f"echo password_hash('{password}', PASSWORD_ARGON2ID);"],
+        ["php", "-r", "echo password_hash(trim(fgets(STDIN)), PASSWORD_ARGON2ID);"],
+        input=password,
         capture=True,
     )
     phash = result.stdout.strip()
     sql = (
-        f"INSERT INTO users (name, email, password_hash, is_admin) "
+        "INSERT INTO users (name, email, password_hash, is_admin) "
         f"VALUES ('{name}', '{email}', '{phash}', 1) "
         f"ON DUPLICATE KEY UPDATE password_hash='{phash}', is_admin=1;\n"
     )
@@ -2454,8 +2457,8 @@ bantime  = 600
 
 def setup_systemd() -> None:
     """Install and enable the watchdog systemd service."""
-    write_file(SYSTEMD_SERVICE, SYSTEMD_SERVICE)
-    write_file(SYSTEMD_TIMER,   SYSTEMD_TIMER)
+    write_file(SYSTEMD_SERVICE, SYSTEMD_SERVICE_CONTENT)
+    write_file(SYSTEMD_TIMER,   SYSTEMD_TIMER_CONTENT)
     run_cmd(["systemctl", "daemon-reload"])
     run_cmd(["systemctl", "enable", "--now", "shopkit-watchdog.timer"])
     logger.info("Systemd watchdog timer enabled.")
